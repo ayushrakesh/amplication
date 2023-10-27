@@ -1,13 +1,14 @@
 import { DSGResourceData, ModuleMap } from "@amplication/code-gen-types";
 import normalize from "normalize-path";
-import { createAdminModules } from "./admin/create-admin";
 import DsgContext from "./dsg-context";
 import { EnumResourceType } from "./models";
 import { prepareContext } from "./prepare-context";
-import { createServer } from "./server/create-server";
 import { ILogger } from "@amplication/util/logging";
 import { createDTOModules, createDTOs } from "./server/resource/create-dtos";
 import { formatCode } from "@amplication/code-gen-utils";
+import { Worker } from "worker_threads";
+import { stringify } from "flatted";
+import path from "path";
 
 export async function createDataService(
   dSGResourceData: DSGResourceData,
@@ -49,17 +50,43 @@ export async function createDataService(
     await context.logger.info("Formatting DTOs code...");
     await dtoModules.replaceModulesCode((path, code) => formatCode(path, code));
 
-    const serverModules = await createServer();
-
     const { adminUISettings } = settings;
     const { generateAdminUI } = adminUISettings;
 
-    const adminUIModules =
-      (generateAdminUI && (await createAdminModules())) ||
-      new ModuleMap(context.logger);
+    const serializedContext = context.serializeForWorker();
+
+    await context.logger.info("CREATE SERVER WORKER...");
+    const serverWorker = new Worker(
+      path.resolve(__dirname, "./create-server-worker.js")
+    );
+    const serverPromise = new Promise<ModuleMap>((resolve, reject) => {
+      serverWorker.on("message", (data) => resolve(data));
+      serverWorker.on("error", reject);
+      serverWorker.postMessage(stringify(serializedContext));
+    });
+
+    let adminPromise: Promise<ModuleMap> | null = null;
+    if (generateAdminUI) {
+      await context.logger.info("CREATE ADMIN WORKER...");
+      const adminUiWorker = new Worker(
+        path.resolve(__dirname, "./create-admin-worker.js")
+      );
+      adminPromise = new Promise<ModuleMap>((resolve, reject) => {
+        adminUiWorker.on("message", resolve);
+        adminUiWorker.on("error", reject);
+        adminUiWorker.postMessage(stringify(serializedContext));
+      });
+    }
+
+    const [serverModules, adminUIModules] = await Promise.all([
+      serverPromise,
+      adminPromise || Promise.resolve(new ModuleMap(context.logger)),
+    ]);
 
     const modules = await serverModules.merge(dtoModules);
-    await modules.merge(adminUIModules);
+    if (adminUIModules) {
+      await modules.merge(adminUIModules);
+    }
 
     // This code normalizes the path of each module to always use Unix path separator.
     await context.logger.info(
