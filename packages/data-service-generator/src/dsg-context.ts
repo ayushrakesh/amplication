@@ -14,6 +14,7 @@ import {
   USER_ROLES_FIELD_NAME,
 } from "./server/user-entity/user-entity";
 import { BuildLogger } from "./build-logger";
+import { cloneDeep } from "lodash";
 
 class DsgContext implements types.DsgContext {
   public appInfo!: types.AppInfo;
@@ -24,7 +25,7 @@ class DsgContext implements types.DsgContext {
   // eslint-disable-next-line @typescript-eslint/naming-convention
   public DTOs: types.DTOs = {};
   public plugins: types.PluginMap = {};
-  public readonly logger: IBuildLogger;
+  public logger: IBuildLogger;
   public utils: ContextUtil = {
     skipDefaultBehavior: false,
     abortGeneration: (msg: string) => {
@@ -55,14 +56,49 @@ class DsgContext implements types.DsgContext {
     return this.instance || (this.instance = new this());
   }
 
+  public serializeForWorker(): types.DsgContext {
+    return {
+      resourceType: this.resourceType,
+      resourceInfo: this.appInfo,
+      buildId: this.buildId,
+      entities: this.entities,
+      roles: this.roles,
+      modules: this.modules,
+      DTOs: this.DTOs,
+      plugins: this.plugins,
+      pluginInstallations: this.pluginInstallations,
+      logger: this.logger,
+      utils: this.utils,
+      clientDirectories: this.clientDirectories,
+      serverDirectories: this.serverDirectories,
+      userEntityName: this.userEntityName,
+      userNameFieldName: this.userNameFieldName,
+      userPasswordFieldName: this.userPasswordFieldName,
+      userRolesFieldName: this.userRolesFieldName,
+      serviceTopics: this.serviceTopics,
+      topics: this.topics,
+    };
+  }
+
   private constructor() {
     //prevent external code from creating instances of the context
     this.logger = new BuildLogger();
     this.modules = new types.ModuleMap(this.logger);
   }
 
+  public static createFromData(data: Partial<DsgContext>): DsgContext {
+    const context = new DsgContext();
+    const clonedData = cloneDeep(data);
+    Object.assign(context, clonedData);
+    return context;
+  }
+
   public get resourceInfo(): types.AppInfo {
     return this.appInfo;
+  }
+
+  public set resourceInfo(value: types.AppInfo) {
+    this.appInfo = value;
   }
 
   public resourceType!: EnumResourceType;
